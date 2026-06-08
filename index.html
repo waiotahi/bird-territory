@@ -276,7 +276,7 @@ html, body { height:100%; overflow:hidden; background:#000; font-family:'Inter',
   <button id="bird-trigger" onclick="toggleDropdown()">
     <span class="trigger-left">
       <span class="trigger-dots" id="trigger-dots"></span>
-      <span class="trigger-label">Birds</span>
+      <span class="trigger-label">Select bird</span>
     </span>
     <span class="trigger-count" id="trigger-count">5 / 5</span>
     <svg id="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -362,7 +362,7 @@ function switchBasemap(name){
 L.control.zoom({position:'bottomright'}).addTo(map);
 
 // Layers
-const activeBirds=new Set(BIRDS.map(b=>b.name));
+const activeBirds=new Set(); // start with no markers shown
 const layers={};
 const sheet=document.getElementById('infosheet');
 
@@ -381,7 +381,7 @@ function openSheet(bird,pt){
 map.on('click',()=>{sheet.classList.remove('open');});
 
 BIRDS.forEach(bird=>{
-  const mg=L.layerGroup().addTo(map);
+  const mg=L.layerGroup(); // markers start hidden — added to map when bird selected
   const raster=L.imageOverlay(bird.rasterB64,[bird.sw,bird.ne],{opacity:0.7,interactive:false}).addTo(map);
   layers[bird.name]={markers:mg,raster};
   bird.pts.forEach(pt=>{
@@ -395,9 +395,8 @@ BIRDS.forEach(bird=>{
   });
 });
 
-const allLats=BIRDS.flatMap(b=>b.pts.map(p=>p.lat));
-const allLons=BIRDS.flatMap(b=>b.pts.map(p=>p.lon));
-map.fitBounds([[Math.min(...allLats)-.004,Math.min(...allLons)-.006],[Math.max(...allLats)+.004,Math.max(...allLons)+.006]]);
+// Open on Bruce's raster at zoom 16, markers hidden
+map.setView([-38.8494067, 176.8481575], 16);
 
 // Raster toggle
 document.getElementById('rtog').addEventListener('change',e=>{
@@ -418,7 +417,7 @@ function buildBirdOpts(){
   const el=document.getElementById('bird-opts');
   BIRDS.forEach(bird=>{
     const row=document.createElement('div');
-    row.className='bird-opt active';
+    row.className='bird-opt inactive';
     row.dataset.name=bird.name;
     row.innerHTML=`
       <div class="bo-dot" style="background:${bird.color}"></div>
@@ -432,8 +431,19 @@ function buildBirdOpts(){
     row.addEventListener('click',e=>{
       e.stopPropagation();
       const on=activeBirds.has(bird.name);
-      if(on){activeBirds.delete(bird.name);row.classList.replace('active','inactive');layers[bird.name].markers.remove();layers[bird.name].raster.remove();}
-      else{activeBirds.add(bird.name);row.classList.replace('inactive','active');layers[bird.name].markers.addTo(map);if(document.getElementById('rtog').checked)layers[bird.name].raster.addTo(map);}
+      if(on){
+        activeBirds.delete(bird.name);
+        row.classList.replace('active','inactive');
+        layers[bird.name].markers.remove();
+      } else {
+        activeBirds.add(bird.name);
+        row.classList.replace('inactive','active');
+        layers[bird.name].markers.addTo(map);
+        // Fly to this bird's raster centre at zoom 16
+        const clat=(bird.sw[0]+bird.ne[0])/2, clon=(bird.sw[1]+bird.ne[1])/2;
+        map.flyTo([clat,clon], 16, {duration:1.2, easeLinearity:0.4});
+        closeDropdown();
+      }
       updateTrigger();
     });
     el.appendChild(row);
@@ -535,7 +545,11 @@ function toggleGPS(){
     }
     btn.classList.add('waiting');
     gpsFollowing = true;
-    gpsWatchId = navigator.geolocation.watchPosition(
+    // iOS requires getCurrentPosition first to trigger permission prompt
+    navigator.geolocation.getCurrentPosition(
+      function(pos){
+        // Permission granted - now start watching
+        gpsWatchId = navigator.geolocation.watchPosition(
       function(pos){
         const latlng = [pos.coords.latitude, pos.coords.longitude];
         const acc = pos.coords.accuracy;
@@ -548,10 +562,27 @@ function toggleGPS(){
       function(err){
         btn.classList.remove('waiting','active');
         gpsActive = false;
-        const msgs = {1:'Location access denied.', 2:'Location unavailable.', 3:'Location request timed out.'};
-        alert(msgs[err.code] || 'GPS error.');
+        const msgs = {
+          1:'Permission denied (code 1) — go to Settings > Privacy > Location Services > Safari Websites > Allow',
+          2:'Position unavailable (code 2) — no GPS signal',
+          3:'Timeout (code 3) — GPS took too long'
+        };
+        alert('GPS error: ' + (msgs[err.code] || 'Unknown error, code: '+err.code+', message: '+err.message));
       },
-      {enableHighAccuracy:true, maximumAge:5000, timeout:15000}
+        {enableHighAccuracy:true, maximumAge:5000, timeout:15000}
+      );
+    },
+    function(err){
+      btn.classList.remove('waiting','active');
+      gpsActive = false;
+      const msgs = {
+        1:'Permission denied — go to Settings > Privacy & Security > Location Services > Safari Websites > Allow',
+        2:'Position unavailable',
+        3:'Timed out getting location'
+      };
+      alert('GPS: ' + (msgs[err.code] || 'Error code '+err.code));
+    },
+    {enableHighAccuracy:true, maximumAge:0, timeout:10000}
     );
   } else {
     // Stop
@@ -569,11 +600,7 @@ document.getElementById('gps-btn').addEventListener('click', function(){
   if(gpsActive){ gpsFollowing = true; }
 }, true);
 
-// Service worker
-if('serviceWorker' in navigator){
-  const sw=`const C='flrt-v1';self.addEventListener('fetch',e=>{if(e.request.url.includes('.tile.openstreetmap.org')){e.respondWith(caches.open(C).then(async c=>{const r=await c.match(e.request);if(r)return r;try{const f=await fetch(e.request);if(f.ok)c.put(e.request,f.clone());return f;}catch{return new Response('',{status:503});}}));}});`;
-  navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'})),{scope:'/'}).catch(()=>{});
-}
+// Service worker will be added as sw.js for offline support
 </script>
 </body>
 </html>
